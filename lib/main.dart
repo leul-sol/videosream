@@ -6,7 +6,6 @@ import 'routes/app_router.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Force portrait orientation
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
