@@ -56,12 +56,9 @@ class _VideoFeedScreenState extends ConsumerState<VideoFeedScreen> {
               itemBuilder: (context, index) {
                 if ((index - currentIndex).abs() <= 1) {
                   final video = videos[index];
-                  final nextVideo =
-                      index + 1 < videos.length ? videos[index + 1] : null;
 
                   return VideoPlayerWidget(
                     video: video,
-                    nextVideo: nextVideo,
                   );
                 } else {
                   return Container(color: Colors.black);

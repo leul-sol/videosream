@@ -123,16 +123,6 @@ class VideoController
     }
   }
 
-  Future<void> preloadNext(Video video) async {
-    try {
-      if (!await _cacheService.isVideoCached(video.streamUrl)) {
-        _cacheService.cacheVideo(video.streamUrl);
-      }
-    } catch (e) {
-      print('Error preloading video: $e');
-    }
-  }
-
   Future<void> dispose() async {
     await _controller?.dispose();
     _controller = null;

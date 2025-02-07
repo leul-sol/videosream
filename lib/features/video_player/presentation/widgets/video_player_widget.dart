@@ -10,11 +10,9 @@ import '../providers/video_provider.dart';
 
 class VideoPlayerWidget extends ConsumerStatefulWidget {
   final Video video;
-  final Video? nextVideo;
 
   const VideoPlayerWidget({
     required this.video,
-    this.nextVideo,
     Key? key,
   }) : super(key: key);
 
