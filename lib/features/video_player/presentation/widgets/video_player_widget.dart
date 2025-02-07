@@ -6,7 +6,6 @@ import 'package:visibility_detector/visibility_detector.dart';
 import '../../data/models/video.dart';
 import '../controllers/video_controller.dart';
 import '../providers/video_provider.dart';
-// import '../providers/video_providers.dart';
 
 class VideoPlayerWidget extends ConsumerStatefulWidget {
   final Video video;
@@ -22,50 +21,7 @@ class VideoPlayerWidget extends ConsumerStatefulWidget {
 
 class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   ChewieController? _chewieController;
-  bool _isVisible = true;
-  bool _isInitialized = false;
-  bool _isRetrying = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _deferredInitialization();
-  }
-
-  void _deferredInitialization() {
-    if (_isRetrying) return;
-
-    Future.microtask(() async {
-      if (!_isInitialized && mounted) {
-        _isInitialized = true;
-        await ref
-            .read(videoControllerProvider(widget.video).notifier)
-            .initialize(widget.video);
-      }
-    });
-  }
-
-  Future<void> _retryInitialization() async {
-    if (_isRetrying) return;
-
-    setState(() {
-      _isRetrying = true;
-    });
-
-    try {
-      _isInitialized = false;
-      await ref.read(videoControllerProvider(widget.video).notifier).dispose();
-      await ref
-          .read(videoControllerProvider(widget.video).notifier)
-          .initialize(widget.video);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isRetrying = false;
-        });
-      }
-    }
-  }
+  bool _isVisible = false;
 
   @override
   void dispose() {
@@ -97,11 +53,12 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
-              if (!_isRetrying)
-                ElevatedButton(
-                  onPressed: _retryInitialization,
-                  child: const Text('Retry'),
-                ),
+              ElevatedButton(
+                onPressed: () {
+                  ref.refresh(videoControllerProvider(widget.video));
+                },
+                child: const Text('Retry'),
+              ),
             ],
           ),
         );
@@ -140,23 +97,7 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
         child: controllerState.when(
           data: (controller) {
             if (controller == null) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text(
-                      'Failed to load video',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    const SizedBox(height: 16),
-                    if (!_isRetrying)
-                      ElevatedButton(
-                        onPressed: _retryInitialization,
-                        child: const Text('Retry'),
-                      ),
-                  ],
-                ),
-              );
+              return const Center(child: CircularProgressIndicator());
             }
 
             if (_chewieController?.videoPlayerController != controller) {
@@ -176,20 +117,18 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
               children: [
                 const Icon(Icons.error_outline, color: Colors.red, size: 48),
                 const SizedBox(height: 16),
-                const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Text(
-                    'Error loading video. Please try again.',
-                    style: TextStyle(color: Colors.white),
-                    textAlign: TextAlign.center,
-                  ),
+                const Text(
+                  'Error loading video. Please try again.',
+                  style: TextStyle(color: Colors.white),
+                  textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 16),
-                if (!_isRetrying)
-                  ElevatedButton(
-                    onPressed: _retryInitialization,
-                    child: const Text('Retry'),
-                  ),
+                ElevatedButton(
+                  onPressed: () {
+                    ref.refresh(videoControllerProvider(widget.video));
+                  },
+                  child: const Text('Retry'),
+                ),
               ],
             ),
           ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/video_provider.dart';
 import '../widgets/video_player_widget.dart';
+import '../controllers/video_controller.dart';
 
 class VideoFeedScreen extends ConsumerStatefulWidget {
   const VideoFeedScreen({Key? key}) : super(key: key);
@@ -14,15 +15,29 @@ class _VideoFeedScreenState extends ConsumerState<VideoFeedScreen> {
   final PageController _pageController = PageController();
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _preloadVideos(0);
+    });
+  }
+
+  @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
   }
 
+  void _preloadVideos(int currentIndex) {
+    final videos = ref.read(videosProvider);
+    for (int i = currentIndex; i < currentIndex + 3 && i < videos.length; i++) {
+      ref.read(videoControllerProvider(videos[i]));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final videos = ref.watch(videosProvider);
-    final currentIndex = ref.watch(currentVideoIndexProvider);
     final isOnline = ref.watch(connectivityProvider);
 
     return Scaffold(
@@ -51,18 +66,12 @@ class _VideoFeedScreenState extends ConsumerState<VideoFeedScreen> {
               controller: _pageController,
               onPageChanged: (index) {
                 ref.read(currentVideoIndexProvider.notifier).state = index;
+                _preloadVideos(index);
               },
               itemCount: videos.length,
               itemBuilder: (context, index) {
-                if ((index - currentIndex).abs() <= 1) {
-                  final video = videos[index];
-
-                  return VideoPlayerWidget(
-                    video: video,
-                  );
-                } else {
-                  return Container(color: Colors.black);
-                }
+                final video = videos[index];
+                return VideoPlayerWidget(video: video);
               },
             );
           },
