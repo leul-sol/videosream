@@ -9,9 +9,11 @@ import '../providers/video_provider.dart';
 
 class VideoPlayerWidget extends ConsumerStatefulWidget {
   final Video video;
+  final bool isInitialVideo;
 
   const VideoPlayerWidget({
     required this.video,
+    this.isInitialVideo = false,
     Key? key,
   }) : super(key: key);
 
@@ -22,6 +24,29 @@ class VideoPlayerWidget extends ConsumerStatefulWidget {
 class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   ChewieController? _chewieController;
   bool _isVisible = false;
+  bool _hasInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.isInitialVideo) {
+      _initializeVideo();
+    }
+  }
+
+  Future<void> _initializeVideo() async {
+    if (_hasInitialized) return;
+    _hasInitialized = true;
+
+    // Small delay to ensure proper widget mounting
+    await Future.microtask(() async {
+      if (mounted) {
+        await ref
+            .read(videoControllerProvider(widget.video).notifier)
+            .initialize(widget.video);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -55,7 +80,8 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: () {
-                  ref.refresh(videoControllerProvider(widget.video));
+                  _hasInitialized = false;
+                  _initializeVideo();
                 },
                 child: const Text('Retry'),
               ),
@@ -78,6 +104,10 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
           _isVisible = info.visibleFraction > 0.5;
 
           if (wasVisible != _isVisible) {
+            if (_isVisible && !_hasInitialized) {
+              _initializeVideo();
+            }
+
             controllerState.whenData((controller) {
               if (controller != null) {
                 if (_isVisible) {
@@ -125,7 +155,8 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () {
-                    ref.refresh(videoControllerProvider(widget.video));
+                    _hasInitialized = false;
+                    _initializeVideo();
                   },
                   child: const Text('Retry'),
                 ),

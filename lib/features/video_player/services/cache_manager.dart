@@ -22,19 +22,51 @@ class EnhancedCacheService {
   static final EnhancedCacheService _instance =
       EnhancedCacheService._internal();
   factory EnhancedCacheService() => _instance;
-  EnhancedCacheService._internal();
+  EnhancedCacheService._internal() {
+    _initCacheManager();
+  }
 
-  final CacheManager cacheManager = CacheManager(
-    Config(
-      'videoCache',
-      stalePeriod: const Duration(days: 7),
-      maxNrOfCacheObjects: 20,
-      repo: JsonCacheInfoRepository(databaseName: 'videoCache'),
-      fileService: CustomHttpFileService(),
-    ),
-  );
+  late CacheManager cacheManager;
+  final Set<String> _activeDownloads = {};
 
-  String _generateCacheKey(String url) {
+  Future<void> _initCacheManager() async {
+    try {
+      final cacheDir = await _getCacheDirectory();
+      cacheManager = CacheManager(
+        Config(
+          'videoCache',
+          stalePeriod: const Duration(days: 7),
+          maxNrOfCacheObjects: 20,
+          repo: JsonCacheInfoRepository(databaseName: 'videoCache'),
+          fileService: CustomHttpFileService(),
+          fileSystem: IOFileSystem(cacheDir.path),
+        ),
+      );
+    } catch (e) {
+      print('Error initializing cache manager: $e');
+      // Fallback to default cache manager if custom initialization fails
+      cacheManager = CacheManager(
+        Config(
+          'videoCache',
+          stalePeriod: const Duration(days: 7),
+          maxNrOfCacheObjects: 20,
+          repo: JsonCacheInfoRepository(databaseName: 'videoCache'),
+          fileService: CustomHttpFileService(),
+        ),
+      );
+    }
+  }
+
+  Future<Directory> _getCacheDirectory() async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final cacheDir = Directory('${appDir.path}/video_cache');
+    if (!await cacheDir.exists()) {
+      await cacheDir.create(recursive: true);
+    }
+    return cacheDir;
+  }
+
+  String generateCacheKey(String url) {
     final bytes = utf8.encode(url);
     final digest = sha256.convert(bytes);
     return digest.toString();
@@ -42,18 +74,29 @@ class EnhancedCacheService {
 
   Future<File?> getVideoFromCache(String url) async {
     try {
-      final cacheKey = _generateCacheKey(url);
+      final cacheKey = generateCacheKey(url);
       final fileInfo = await cacheManager.getFileFromCache(cacheKey);
 
       if (fileInfo != null) {
-        // Verify file exists and is valid
         if (await fileInfo.file.exists()) {
           final fileSize = await fileInfo.file.length();
           if (fileSize > 0) {
-            print('Cache hit: $url');
-            return fileInfo.file;
+            // Verify file integrity
+            try {
+              final file = File(fileInfo.file.path);
+              final randomAccessFile = await file.open(mode: FileMode.read);
+              await randomAccessFile.close();
+              print('Cache hit: $url');
+              return fileInfo.file;
+            } catch (e) {
+              print('Cached file corrupted, removing: $e');
+              await cacheManager.removeFile(cacheKey);
+              return null;
+            }
           }
         }
+        // Remove invalid cache entry
+        await cacheManager.removeFile(cacheKey);
       }
 
       print('Cache miss: $url');
@@ -65,8 +108,14 @@ class EnhancedCacheService {
   }
 
   Future<File?> cacheVideo(String url) async {
+    if (_activeDownloads.contains(url)) {
+      print('Download already in progress for: $url');
+      return null;
+    }
+
     try {
-      final cacheKey = _generateCacheKey(url);
+      _activeDownloads.add(url);
+      final cacheKey = generateCacheKey(url);
 
       // Check if already cached
       final existingFile = await getVideoFromCache(url);
@@ -79,12 +128,33 @@ class EnhancedCacheService {
       final fileInfo = await cacheManager.downloadFile(
         url,
         key: cacheKey,
+        force: true, // Force redownload if needed
       );
 
-      return fileInfo.file;
+      if (await fileInfo.file.exists()) {
+        final fileSize = await fileInfo.file.length();
+        if (fileSize > 0) {
+          return fileInfo.file;
+        }
+      }
+
+      // If we get here, the download failed or file is invalid
+      await cacheManager.removeFile(cacheKey);
+      return null;
     } catch (e) {
       print('Error caching video: $e');
       return null;
+    } finally {
+      _activeDownloads.remove(url);
+    }
+  }
+
+  Future<void> removeFromCache(String url) async {
+    try {
+      final cacheKey = generateCacheKey(url);
+      await cacheManager.removeFile(cacheKey);
+    } catch (e) {
+      print('Error removing video from cache: $e');
     }
   }
 
@@ -92,34 +162,19 @@ class EnhancedCacheService {
     try {
       await cacheManager.emptyCache();
 
-      // Also clear temporary directory
-      final tempDir = await getTemporaryDirectory();
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-        await tempDir.create();
+      // Clear the cache directory
+      final cacheDir = await _getCacheDirectory();
+      if (await cacheDir.exists()) {
+        await cacheDir.delete(recursive: true);
+        await cacheDir.create();
       }
+
+      // Reinitialize cache manager
+      await _initCacheManager();
 
       print('Cache cleared successfully');
     } catch (e) {
       print('Error clearing cache: $e');
-    }
-  }
-
-  Future<int> getCacheSize() async {
-    try {
-      final tempDir = await getTemporaryDirectory();
-      int size = 0;
-
-      await for (var entity in tempDir.list(recursive: true)) {
-        if (entity is File) {
-          size += await entity.length();
-        }
-      }
-
-      return size;
-    } catch (e) {
-      print('Error getting cache size: $e');
-      return 0;
     }
   }
 

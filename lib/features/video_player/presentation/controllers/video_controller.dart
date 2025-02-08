@@ -6,15 +6,14 @@ import '../../services/cache_manager.dart';
 
 class VideoController
     extends StateNotifier<AsyncValue<VideoPlayerController?>> {
-  VideoController(this.video) : super(const AsyncValue.loading()) {
-    _cacheService = EnhancedCacheService();
-    _initialize();
-  }
-
-  final Video video;
-  late final EnhancedCacheService _cacheService;
+  VideoController() : super(const AsyncValue.loading());
   VideoPlayerController? _controller;
+  final _cacheService = EnhancedCacheService();
   bool _isInitializing = false;
+  bool _isDisposed = false;
+  int _retryCount = 0;
+  static const int maxRetries = 3;
+  String? _currentVideoUrl;
 
   Future<bool> _checkVideoAvailability(String url) async {
     try {
@@ -26,78 +25,164 @@ class VideoController
     }
   }
 
-  Future<void> _initialize() async {
-    if (_isInitializing) return;
+  Future<void> initialize(Video video, {bool forceReload = false}) async {
+    if (!mounted || _isDisposed) return;
+
+    // If already initializing this video, wait
+    if (_isInitializing && _currentVideoUrl == video.streamUrl) {
+      return;
+    }
+
+    // If initializing a different video, cancel current initialization
+    if (_isInitializing && _currentVideoUrl != video.streamUrl) {
+      _isInitializing = false;
+    }
+
     _isInitializing = true;
+    _currentVideoUrl = video.streamUrl;
 
     try {
-      final cachedFile = await _cacheService.getVideoFromCache(video.streamUrl);
+      final previousController = _controller;
+      VideoPlayerController? newController;
 
-      VideoPlayerController newController;
-      if (cachedFile != null) {
-        print('Loading video from cache: ${video.streamUrl}');
-        newController = VideoPlayerController.file(
-          cachedFile,
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false),
-        );
-      } else {
-        print('Loading video from network: ${video.streamUrl}');
+      if (!forceReload) {
+        // Try to get video from cache first
+        final cachedFile =
+            await _cacheService.getVideoFromCache(video.streamUrl);
+
+        if (cachedFile != null) {
+          try {
+            newController = VideoPlayerController.file(
+              cachedFile,
+              videoPlayerOptions: VideoPlayerOptions(
+                mixWithOthers: false,
+                allowBackgroundPlayback: false,
+              ),
+            );
+            await newController.initialize();
+          } catch (e) {
+            print('Error loading cached file: $e');
+            newController?.dispose();
+            newController = null;
+            // Remove corrupted cache
+            await _cacheService.removeFromCache(video.streamUrl);
+          }
+        }
+      }
+
+      // If cache loading failed or force reload, try network
+      if (newController == null) {
+        // Only check availability for network loading
         final isAvailable = await _checkVideoAvailability(video.streamUrl);
         if (!isAvailable) {
           throw Exception('Video not available');
         }
+
+        if (_isDisposed || !mounted || _currentVideoUrl != video.streamUrl) {
+          return;
+        }
+
         newController = VideoPlayerController.networkUrl(
           Uri.parse(video.streamUrl),
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false),
+          videoPlayerOptions: VideoPlayerOptions(
+            mixWithOthers: false,
+            allowBackgroundPlayback: false,
+          ),
           httpHeaders: {
             'Content-Type': 'application/x-mpegURL',
             'Accept': 'application/x-mpegURL',
           },
         );
 
-        _cacheService.cacheVideo(video.streamUrl).then((_) {
+        await newController.initialize();
+
+        // Cache the video for future use
+        _cacheService.cacheVideo(video.streamUrl).then((file) {
           print('Video cached successfully: ${video.streamUrl}');
         }).catchError((error) {
           print('Error caching video: $error');
         });
       }
 
-      await newController.initialize();
-      _controller = newController;
+      if (_isDisposed || !mounted || _currentVideoUrl != video.streamUrl) {
+        await newController?.dispose();
+        return;
+      }
 
-      if (mounted) {
+      // Setup error listener
+      newController.addListener(() {
+        if (newController!.value.hasError && mounted && !_isDisposed) {
+          print('Video player error: ${newController.value.errorDescription}');
+          _handleVideoError(video);
+        }
+      });
+
+      // Update controller reference and state
+      if (!_isDisposed && mounted && _currentVideoUrl == video.streamUrl) {
+        _controller = newController;
         state = AsyncValue.data(newController);
+        _retryCount = 0; // Reset retry count on successful initialization
+      } else {
+        await newController.dispose();
+      }
+
+      // Dispose previous controller after successful initialization
+      if (previousController != null && previousController != newController) {
+        await previousController.dispose();
       }
     } catch (e, stack) {
       print('Error initializing video: $e');
-      if (mounted) {
+      if (!_isDisposed && mounted && _currentVideoUrl == video.streamUrl) {
+        if (_retryCount < maxRetries) {
+          _retryCount++;
+          print('Retrying initialization (attempt $_retryCount)...');
+          _isInitializing = false;
+          await Future.delayed(Duration(seconds: _retryCount));
+          initialize(video, forceReload: true);
+          return;
+        }
         state = AsyncValue.error(e, stack);
       }
     } finally {
-      _isInitializing = false;
+      if (_currentVideoUrl == video.streamUrl) {
+        _isInitializing = false;
+      }
     }
   }
 
-  Future<void> play() async {
-    await _controller?.play();
+  void _handleVideoError(Video video) async {
+    if (_isDisposed) return;
+
+    print('Handling video error for: ${video.streamUrl}');
+
+    // Clear cache for this video
+    await _cacheService.removeFromCache(video.streamUrl);
+
+    // Try to reinitialize
+    if (!_isDisposed && mounted && _retryCount < maxRetries) {
+      _retryCount++;
+      print('Retrying after error (attempt $_retryCount)...');
+      initialize(video, forceReload: true);
+    }
   }
 
-  Future<void> pause() async {
-    await _controller?.pause();
-  }
-
-  Future<void> seekTo(Duration position) async {
-    await _controller?.seekTo(position);
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
+  Future<void> dispose() async {
+    _isDisposed = true;
+    await _controller?.dispose();
+    _controller = null;
     super.dispose();
+  }
+
+  void play() {
+    _controller?.play();
+  }
+
+  void pause() {
+    _controller?.pause();
   }
 }
 
 final videoControllerProvider = StateNotifierProvider.family<VideoController,
     AsyncValue<VideoPlayerController?>, Video>(
-  (ref, video) => VideoController(video),
+  (ref, _) => VideoController(),
 );

@@ -13,26 +13,64 @@ class VideoFeedScreen extends ConsumerStatefulWidget {
 
 class _VideoFeedScreenState extends ConsumerState<VideoFeedScreen> {
   final PageController _pageController = PageController();
+  int _lastPreloadedIndex = -1;
+  bool _isFirstLoadComplete = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _preloadVideos(0);
-    });
+    // Delay the initial load slightly to ensure proper widget mounting
+    Future.microtask(() => _initializeFirstVideo());
+  }
+
+  Future<void> _initializeFirstVideo() async {
+    if (_isFirstLoadComplete) return;
+
+    final videos = ref.read(videosProvider);
+    if (videos.isNotEmpty) {
+      // Initialize first video
+      await ref
+          .read(videoControllerProvider(videos[0]).notifier)
+          .initialize(videos[0]);
+
+      if (mounted) {
+        setState(() {
+          _isFirstLoadComplete = true;
+        });
+
+        // Start preloading next videos after first video is ready
+        _preloadVideos(0);
+      }
+    }
+  }
+
+  void _preloadVideos(int currentIndex) {
+    if (currentIndex == _lastPreloadedIndex) return;
+    _lastPreloadedIndex = currentIndex;
+
+    final videos = ref.read(videosProvider);
+
+    // Preload next videos
+    for (int i = currentIndex + 1;
+        i < currentIndex + 2 && i < videos.length;
+        i++) {
+      final video = videos[i];
+      ref.read(videoControllerProvider(video).notifier).initialize(video);
+    }
+
+    // Preload previous video if available
+    if (currentIndex > 0) {
+      final previousVideo = videos[currentIndex - 1];
+      ref
+          .read(videoControllerProvider(previousVideo).notifier)
+          .initialize(previousVideo);
+    }
   }
 
   @override
   void dispose() {
     _pageController.dispose();
     super.dispose();
-  }
-
-  void _preloadVideos(int currentIndex) {
-    final videos = ref.read(videosProvider);
-    for (int i = currentIndex; i < currentIndex + 3 && i < videos.length; i++) {
-      ref.read(videoControllerProvider(videos[i]));
-    }
   }
 
   @override
@@ -61,6 +99,12 @@ class _VideoFeedScreenState extends ConsumerState<VideoFeedScreen> {
               );
             }
 
+            if (videos.isEmpty) {
+              return const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              );
+            }
+
             return PageView.builder(
               scrollDirection: Axis.vertical,
               controller: _pageController,
@@ -71,7 +115,11 @@ class _VideoFeedScreenState extends ConsumerState<VideoFeedScreen> {
               itemCount: videos.length,
               itemBuilder: (context, index) {
                 final video = videos[index];
-                return VideoPlayerWidget(video: video);
+                return VideoPlayerWidget(
+                  key: ValueKey(video.id),
+                  video: video,
+                  isInitialVideo: index == 0 && !_isFirstLoadComplete,
+                );
               },
             );
           },
